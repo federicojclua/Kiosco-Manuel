@@ -25,3 +25,8 @@ pnpm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Capacitor / Android (regenerable con: npx cap add android)
+android/
+*.apk
+
