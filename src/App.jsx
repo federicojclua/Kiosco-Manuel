@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { auth, googleProvider, db } from './firebase';
+import { auth, googleProvider, db, firebaseReady } from './firebase';
 import { signInWithPopup, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { Home, ShoppingCart, Package, BookOpen, Truck, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp } from 'lucide-react';
@@ -32,6 +32,7 @@ export default function App() {
 
   // Auth Listener
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
@@ -41,7 +42,7 @@ export default function App() {
 
   // Firestore Listeners (Solo se activan si hay usuario logueado)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
 
     const unsubInv = onSnapshot(collection(db, 'inventory'), (snap) => {
       setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -288,6 +289,32 @@ export default function App() {
 
   // --- RENDERS DE CARGA Y LOGIN ---
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-200">Cargando...</div>;
+
+  // Si Firebase no esta configurado (faltan variables de entorno), mostramos
+  // un mensaje claro en vez de una pagina en blanco.
+  if (!firebaseReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-200 p-4">
+        <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md">
+          <div className="flex flex-col items-center mb-6">
+            <div className="bg-red-500 p-4 rounded-full mb-4"><AlertCircle className="w-10 h-10 text-white" /></div>
+            <h1 className="text-xl font-bold text-gray-800">Falta configurar Firebase</h1>
+            <p className="text-gray-500 text-sm mt-2 text-center">Este build se genero sin las variables de entorno de Firebase.</p>
+          </div>
+          <p className="text-gray-600 text-sm font-semibold mb-2">En Netlify - Site settings - Environment variables agrega:</p>
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 font-mono text-xs text-gray-600 space-y-1">
+            <div>VITE_FIREBASE_API_KEY</div>
+            <div>VITE_FIREBASE_AUTH_DOMAIN</div>
+            <div>VITE_FIREBASE_PROJECT_ID</div>
+            <div>VITE_FIREBASE_STORAGE_BUCKET</div>
+            <div>VITE_FIREBASE_MESSAGING_SENDER_ID</div>
+            <div>VITE_FIREBASE_APP_ID</div>
+          </div>
+          <p className="text-gray-500 text-sm mt-4 text-center">Despues volve a desplegar el sitio para que tome los valores.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
