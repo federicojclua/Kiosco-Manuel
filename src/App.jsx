@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { auth, googleProvider, db } from './firebase';
 import { signInWithPopup, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, arrayUnion } from 'firebase/firestore';
-import { Home, ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, Upload, ChevronDown, ChevronUp } from 'lucide-react';
+import { Home, ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, Upload, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info } from 'lucide-react';
 
 const HorseLogo = ({ className = "w-8 h-8" }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -23,16 +23,26 @@ export default function App() {
   const [sales, setSales] = useState([]);
   const [fiados, setFiados] = useState([]);
   
-  // Estados UI
+  // Estados UI y Experiencia
   const [cart, setCart] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCheckout, setShowCheckout] = useState(false);
   const [selectedFiadoId, setSelectedFiadoId] = useState('');
-  const [showSuccess, setShowSuccess] = useState(false);
+  
+  // Pop-ups y Notificaciones
+  const [toastMsg, setToastMsg] = useState(null);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [hasSeenPopup, setHasSeenPopup] = useState(false);
+  const [showPopup, setShowPopup] = useState(false);
 
   const fileInputRef = useRef(null);
 
-  // Auth Listener con Bloqueo de Usuario
+  // Helper para Tostadas (Explicaciones de acciones)
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3500);
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
@@ -51,7 +61,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Firestore Listeners
   useEffect(() => {
     if (!user) return;
     const unsubInv = onSnapshot(collection(db, 'inventory'), (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -59,6 +68,14 @@ export default function App() {
     const unsubFiados = onSnapshot(collection(db, 'fiados'), (snap) => setFiados(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     return () => { unsubInv(); unsubSales(); unsubFiados(); };
   }, [user]);
+
+  // Logica para descubrir si hay alertas al iniciar (Stock bajo de top vendidos o Fiados pendientes)
+  useEffect(() => {
+    if (user && !loading && !hasSeenPopup && (inventory.length > 0 || fiados.length > 0)) {
+      setShowPopup(true);
+      setHasSeenPopup(true);
+    }
+  }, [user, loading, inventory.length, fiados.length, hasSeenPopup]);
 
   const handleGoogleLogin = async () => {
     try { await signInWithPopup(auth, googleProvider); } 
@@ -68,7 +85,7 @@ export default function App() {
   const handleEmailLogin = async (e) => {
     e.preventDefault();
     try { await signInWithEmailAndPassword(auth, email, password); } 
-    catch (error) { alert("Error: " + error.message); }
+    catch (error) { alert("Error de ingreso. Verifica tu correo y clave."); }
   };
 
   // --- LOGICA DE NEGOCIO ---
@@ -88,17 +105,19 @@ export default function App() {
   };
 
   const processSale = async (method) => {
-    if (cart.length === 0) return;
-    if (method === 'fiado' && !selectedFiadoId) return alert('Selecciona un cliente de la lista para fiarle.');
+    if (cart.length === 0) {
+      return showToast('El carrito esta vacio. Toca algun producto para empezar a cobrar.');
+    }
+    if (method === 'fiado' && !selectedFiadoId) {
+      return showToast('Te olvidaste de elegir a quien fiarle. Selecciona un cliente de la lista.');
+    }
 
     try {
-      // 1. Guardar Venta
       await addDoc(collection(db, 'sales'), {
         items: cart, total: cartTotal, method: method,
         date: new Date().toISOString(), timestamp: serverTimestamp()
       });
 
-      // 2. Descontar Stock
       for (const item of cart) {
         if (!item.product.isService) {
           const prodRef = doc(db, 'inventory', item.product.id);
@@ -106,7 +125,6 @@ export default function App() {
         }
       }
 
-      // 3. Registrar Historial en Fiado
       if (method === 'fiado') {
         const cliente = fiados.find(f => f.id === selectedFiadoId);
         if (cliente) {
@@ -114,9 +132,7 @@ export default function App() {
             totalDebt: cliente.totalDebt + cartTotal,
             history: arrayUnion({
               date: new Date().toISOString(),
-              description: `Compra (${cart.length} articulos)`,
-              amount: cartTotal,
-              type: 'cargo' // Deuda nueva
+              description: `Compra (${cart.length} articulos)`, amount: cartTotal, type: 'cargo'
             })
           });
         }
@@ -124,38 +140,37 @@ export default function App() {
 
       setCart([]);
       setShowCheckout(false);
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 2000);
+      showToast('Venta registrada con exito!');
     } catch (error) {
-      alert('Error procesando venta: ' + error.message);
+      showToast('Hubo un error de conexion al procesar la venta.');
     }
   };
 
-  // Importar CSV
   const handleCSVUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const text = event.target.result;
-      const rows = text.split(/\r?\n/).slice(1); // Salta la primera fila (titulos)
-      let count = 0;
-      for (let row of rows) {
-        if (!row.trim()) continue;
-        const [name, cost, price, stock] = row.split(',');
-        if (name && price) {
-          await addDoc(collection(db, 'inventory'), {
-            name: name.trim(),
-            cost: Number(cost) || 0,
-            price: Number(price) || 0,
-            stock: Number(stock) || 0,
-            minStock: 5, category: 'General', isService: false
-          });
-          count++;
+      try {
+        const text = event.target.result;
+        const rows = text.split(/\r?\n/).slice(1);
+        let count = 0;
+        for (let row of rows) {
+          if (!row.trim()) continue;
+          const [name, cost, price, stock] = row.split(',');
+          if (name && price) {
+            await addDoc(collection(db, 'inventory'), {
+              name: name.trim(), cost: Number(cost) || 0, price: Number(price) || 0,
+              stock: Number(stock) || 0, minStock: 5, category: 'General', isService: false
+            });
+            count++;
+          }
         }
+        showToast(`Se importaron ${count} productos correctamente.`);
+      } catch (error) {
+        showToast('El archivo no tiene el formato correcto. Revisa que sea un CSV valido.');
       }
-      alert(`¡Exito! Se importaron ${count} productos.`);
-      e.target.value = ''; // Resetea el input
+      e.target.value = ''; 
     };
     reader.readAsText(file);
   };  // --- VISTAS ---
@@ -163,14 +178,15 @@ export default function App() {
     <div className="h-full flex flex-col pb-20">
       <div className="p-3 bg-white shadow-sm z-10 relative">
         <Search className="absolute left-6 top-5 text-gray-400 w-5 h-5" />
-        <input type="text" placeholder="Buscar producto para vender..." 
+        <input type="text" placeholder="Buscar producto..." 
           className="w-full bg-gray-100 rounded-full py-2 pl-10 pr-4 outline-none focus:ring-2 focus:ring-emerald-500"
           value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
       </div>
       
       <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 content-start bg-gray-50">
         {inventory.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(product => (
-          <button key={product.id} onClick={() => addToCart(product)} className="bg-white p-2 rounded-xl shadow-sm flex flex-col items-center justify-center text-center active:scale-95 border border-gray-100">
+          <button key={product.id} onClick={() => addToCart(product)} className="bg-white p-2 rounded-xl shadow-sm flex flex-col items-center justify-center text-center active:scale-95 border border-gray-100 relative">
+            {product.stock <= product.minStock && !product.isService && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
             <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2">
               {product.isService ? <Printer className="w-5 h-5"/> : <Package className="w-5 h-5"/>}
             </div>
@@ -178,7 +194,6 @@ export default function App() {
             <span className="text-sm font-bold text-emerald-600 mt-1">${product.price}</span>
           </button>
         ))}
-        {inventory.length === 0 && <div className="col-span-3 text-center text-gray-400 mt-10 px-4">Tu caja esta vacia. Ve a la pestana "Stock" abajo para agregar o importar tus productos.</div>}
       </div>
 
       {cart.length > 0 && (
@@ -281,13 +296,16 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const pago = Number(prompt(`¿Cuanto entrega ${cliente.name}? (Debe: $${cliente.totalDebt})`));
-                    if (pago) {
-                      await updateDoc(doc(db, 'fiados', cliente.id), { 
-                        totalDebt: Math.max(0, cliente.totalDebt - pago),
-                        history: arrayUnion({ date: new Date().toISOString(), description: 'Pago parcial/total', amount: pago, type: 'pago' })
-                      });
-                    }
+                    const val = prompt(`¿Cuanto entrega ${cliente.name}? (Debe: $${cliente.totalDebt})`);
+                    if (!val) return;
+                    const pago = Number(val);
+                    if (isNaN(pago) || pago <= 0) return showToast("Por favor ingresa un monto valido (solo numeros).");
+                    
+                    await updateDoc(doc(db, 'fiados', cliente.id), { 
+                      totalDebt: Math.max(0, cliente.totalDebt - pago),
+                      history: arrayUnion({ date: new Date().toISOString(), description: 'Abono de deuda', amount: pago, type: 'pago' })
+                    });
+                    showToast(`Se descontaron $${pago} de la cuenta de ${cliente.name}.`);
                   }} className="flex-1 bg-green-50 text-green-700 py-2 rounded-lg font-semibold text-sm">Registrar Pago</button>
                   
                   <button onClick={() => setExpandedId(expandedId === cliente.id ? null : cliente.id)} className="bg-gray-100 p-2 rounded-lg text-gray-600">
@@ -296,17 +314,16 @@ export default function App() {
                 </div>
               </div>
               
-              {/* Historial Desplegable */}
               {expandedId === cliente.id && (
                 <div className="bg-gray-50 p-4 border-t border-gray-100 text-sm">
-                  <p className="font-bold text-gray-500 mb-2 text-xs uppercase tracking-wider">Historial de movimientos</p>
+                  <p className="font-bold text-gray-500 mb-2 text-xs uppercase tracking-wider">Historial</p>
                   {cliente.history && cliente.history.length > 0 ? (
                     <div className="space-y-2">
                       {[...cliente.history].reverse().map((mov, i) => (
                         <div key={i} className="flex justify-between border-b border-gray-200 pb-1">
                           <div>
                             <p className="text-gray-800 font-medium">{mov.description}</p>
-                            <p className="text-xs text-gray-400">{new Date(mov.date).toLocaleDateString()} {new Date(mov.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                            <p className="text-xs text-gray-400">{new Date(mov.date).toLocaleDateString()}</p>
                           </div>
                           <span className={`font-bold ${mov.type === 'pago' ? 'text-green-600' : 'text-orange-500'}`}>
                             {mov.type === 'pago' ? '-' : '+'}${mov.amount}
@@ -314,9 +331,7 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-gray-400 italic">No hay historial todavia.</p>
-                  )}
+                  ) : <p className="text-gray-400 italic">No hay historial todavia.</p>}
                 </div>
               )}
             </div>
@@ -327,47 +342,148 @@ export default function App() {
   };
 
   const DashboardView = () => {
+    const [statPeriod, setStatPeriod] = useState('semana'); // 'semana' o 'mes'
+
     const today = new Date().toDateString();
     const todaySales = sales.filter(s => new Date(s.date).toDateString() === today);
     const totalEfectivo = todaySales.filter(s => s.method === 'efectivo').reduce((acc, s) => acc + s.total, 0);
-    const criticalStock = inventory.filter(p => !p.isService && p.stock <= p.minStock);
+
+    // Calculo Top 15 Vendidos
+    const getTopProducts = (days) => {
+      const limitDate = new Date(new Date().getTime() - days * 24 * 60 * 60 * 1000);
+      const periodSales = sales.filter(s => new Date(s.date) >= limitDate);
+      const counts = {};
+      periodSales.forEach(sale => {
+        sale.items.forEach(item => {
+          if (!counts[item.product.id]) counts[item.product.id] = { name: item.product.name, qty: 0 };
+          counts[item.product.id].qty += item.quantity;
+        });
+      });
+      return Object.values(counts).sort((a,b) => b.qty - a.qty).slice(0, 15);
+    };
+
+    const topProducts = getTopProducts(statPeriod === 'semana' ? 7 : 30);
 
     return (
       <div className="p-4 space-y-6 pb-24 overflow-y-auto h-full">
         <div className="bg-emerald-600 text-white rounded-2xl p-5 shadow-lg">
           <p className="text-emerald-100 text-sm font-medium">Recaudacion Hoy (Caja)</p>
           <h2 className="text-4xl font-bold mt-1">${totalEfectivo}</h2>
-          <p className="mt-4 text-emerald-50 text-sm border-t border-emerald-500 pt-3">Tickets de hoy: {todaySales.length}</p>
+          <p className="mt-4 text-emerald-50 text-sm border-t border-emerald-500 pt-3">Tickets cobrados hoy: {todaySales.length}</p>
         </div>
         
-        <div>
-          <h3 className="font-bold text-gray-700 flex items-center mb-3"><AlertCircle className="w-5 h-5 mr-2 text-orange-500" /> Reposicion Urgente</h3>
-          {criticalStock.map(item => (
-            <div key={item.id} className="bg-white p-3 rounded-xl shadow-sm border border-orange-100 mb-2 flex justify-between">
-              <span className="font-medium text-gray-800">{item.name}</span>
-              <span className="text-xs font-bold bg-orange-100 text-orange-600 py-1 px-2 rounded-full">Quedan: {item.stock}</span>
+        {/* Estadisticas de mas vendidos */}
+        <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-gray-800 flex items-center"><Trophy className="w-5 h-5 mr-2 text-yellow-500" /> Top 15 Vendidos</h3>
+            <select className="bg-gray-100 text-sm rounded-lg p-1 outline-none font-medium text-gray-700" value={statPeriod} onChange={(e) => setStatPeriod(e.target.value)}>
+              <option value="semana">Semana</option>
+              <option value="mes">Mes</option>
+            </select>
+          </div>
+          
+          <div className="space-y-2">
+            {topProducts.length > 0 ? topProducts.map((p, i) => (
+              <div key={i} className="flex justify-between items-center border-b border-gray-50 pb-2">
+                <span className="text-sm text-gray-700"><span className="text-gray-400 font-bold mr-2">{i+1}.</span>{p.name}</span>
+                <span className="text-sm font-bold bg-emerald-50 text-emerald-600 px-2 rounded">{p.qty} unid.</span>
+              </div>
+            )) : <p className="text-xs text-gray-400">Aun no hay suficientes ventas registradas para armar el ranking.</p>}
+          </div>
+        </div>
+      </div>
+    );
+  };  // Pop-up de Alertas Inteligentes (Render)
+  const renderAlertsPopup = () => {
+    if (!showPopup) return null;
+
+    // Calcular que mostrar en el pop-up
+    const top7Days = (() => {
+      const limit = new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000);
+      const periodSales = sales.filter(s => new Date(s.date) >= limit);
+      const counts = {};
+      periodSales.forEach(sale => sale.items.forEach(item => { counts[item.product.id] = (counts[item.product.id] || 0) + item.quantity; }));
+      return Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 15).map(e => e[0]);
+    })();
+
+    const criticalTopProducts = inventory.filter(p => !p.isService && p.stock <= p.minStock && top7Days.includes(p.id));
+    const pendingDebts = fiados.filter(f => f.totalDebt > 0);
+
+    if (criticalTopProducts.length === 0 && pendingDebts.length === 0) return null;
+
+    return (
+      <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+        <div className="bg-white w-full rounded-3xl p-6 relative max-h-[80vh] overflow-y-auto">
+          <button onClick={() => setShowPopup(false)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+          <div className="flex items-center mb-6"><Bell className="w-6 h-6 text-orange-500 mr-2"/><h2 className="text-xl font-bold">Resumen de Alertas</h2></div>
+          
+          {criticalTopProducts.length > 0 && (
+            <div className="mb-6">
+              <h3 className="font-bold text-gray-700 text-sm mb-2 uppercase flex items-center"><AlertCircle className="w-4 h-4 mr-1 text-red-500"/> Falta mercaderia clave!</h3>
+              <p className="text-xs text-gray-500 mb-3">Estos productos estan en tu Top 15 y te queda poco stock:</p>
+              {criticalTopProducts.map(p => (
+                <div key={p.id} className="bg-red-50 p-2 rounded-lg flex justify-between text-sm mb-2 border border-red-100">
+                  <span className="font-medium text-gray-800">{p.name}</span>
+                  <span className="text-red-600 font-bold">Quedan: {p.stock}</span>
+                </div>
+              ))}
             </div>
-          ))}
-          {criticalStock.length === 0 && <p className="text-gray-500 text-sm">Tenes stock suficiente de todo.</p>}
+          )}
+
+          {pendingDebts.length > 0 && (
+            <div>
+              <h3 className="font-bold text-gray-700 text-sm mb-2 uppercase flex items-center"><BookOpen className="w-4 h-4 mr-1 text-blue-500"/> Dinero en la calle</h3>
+              <p className="text-xs text-gray-500 mb-3">Personas que aun te deben dinero:</p>
+              {pendingDebts.map(f => (
+                <div key={f.id} className="bg-blue-50 p-2 rounded-lg flex justify-between text-sm mb-2 border border-blue-100">
+                  <span className="font-medium text-gray-800">{f.name}</span>
+                  <span className="text-blue-700 font-bold">${f.totalDebt}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={() => setShowPopup(false)} className="w-full mt-4 bg-gray-900 text-white font-bold py-3 rounded-xl">Entendido</button>
         </div>
       </div>
     );
   };
 
+  // Render Tutorial (Ayuda)
+  const renderTutorial = () => {
+    if (!showTutorial) return null;
+    return (
+      <div className="absolute inset-0 bg-black/70 z-[60] flex items-center justify-center p-4">
+        <div className="bg-white w-full rounded-3xl p-6 relative">
+          <button onClick={() => setShowTutorial(false)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+          <div className="flex items-center mb-6"><Info className="w-6 h-6 text-blue-500 mr-2"/><h2 className="text-xl font-bold">Como usar la App?</h2></div>
+          
+          <div className="space-y-4 text-sm text-gray-700">
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">1</span><p><strong>Stock:</strong> Agrega tus productos de a uno o subiendo un archivo Excel (.csv). Si no cargas stock, la Caja estara vacia.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">2</span><p><strong>Caja:</strong> Toca los productos para venderlos (se armara un carrito). Luego dale a "Cobrar" y elegi si pagan en Efectivo o se anota en libreta.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">3</span><p><strong>Fiados:</strong> Crea clientes o profesores nuevos. Cuando te paguen, toca "Registrar Pago" para que se descuente la deuda y quede el registro.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">4</span><p><strong>Resumen:</strong> Mira la plata que entra en el dia, el Top 15 de lo mas vendido y recibe alertas automaticas.</p></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Pantallas de Carga y Login
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-200 font-bold text-gray-500">Iniciando Kiosco...</div>;
 
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-200 p-4">
-        <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md">
+        <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md relative">
+          {toastMsg && <div className="absolute -top-16 left-0 right-0 mx-4 bg-gray-800 text-white p-3 rounded-lg text-sm text-center shadow-lg">{toastMsg}</div>}
           <div className="flex flex-col items-center mb-8">
             <div className="bg-emerald-500 p-4 rounded-full mb-4"><HorseLogo className="w-12 h-12 text-white" /></div>
             <h1 className="text-2xl font-black text-gray-800">Kiosco Manuel</h1>
             <p className="text-gray-500 text-sm text-center mt-2">Acceso exclusivo para el administrador</p>
           </div>
           <form onSubmit={handleEmailLogin} className="space-y-4">
-            <input type="email" placeholder="Correo" className="w-full bg-gray-50 border p-3 rounded-xl outline-none focus:border-emerald-500" value={email} onChange={e => setEmail(e.target.value)} required />
-            <input type="password" placeholder="Clave" className="w-full bg-gray-50 border p-3 rounded-xl outline-none focus:border-emerald-500" value={password} onChange={e => setPassword(e.target.value)} required />
+            <input type="email" placeholder="Correo" className="w-full bg-gray-50 border p-3 rounded-xl outline-none" value={email} onChange={e => setEmail(e.target.value)} required />
+            <input type="password" placeholder="Clave" className="w-full bg-gray-50 border p-3 rounded-xl outline-none" value={password} onChange={e => setPassword(e.target.value)} required />
             <button type="submit" className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl">Ingresar</button>
           </form>
         </div>
@@ -379,15 +495,27 @@ export default function App() {
     <div className="flex items-center justify-center min-h-screen bg-gray-200">
       <div className="w-full max-w-md bg-gray-50 h-[100dvh] shadow-2xl relative flex flex-col sm:rounded-[2.5rem] sm:border-[8px] border-gray-900 overflow-hidden">
         
+        {/* Tostada Flotante para errores o confirmaciones */}
+        {toastMsg && (
+          <div className="absolute top-20 left-4 right-4 bg-gray-900 text-white p-3 rounded-xl text-sm font-medium shadow-xl z-[70] animate-in fade-in slide-in-from-top-5">
+            {toastMsg}
+          </div>
+        )}
+
+        {renderAlertsPopup()}
+        {renderTutorial()}
+
         <div className="bg-gray-900 text-white pt-6 pb-4 px-4 flex justify-between items-center shadow-md z-10">
           <div className="flex items-center">
             <div className="bg-emerald-500 p-2 rounded-xl mr-3"><HorseLogo className="w-6 h-6 text-white" /></div>
             <div>
               <h1 className="font-black text-lg tracking-wide">KIOSCO MANUEL</h1>
-              <p className="text-xs text-emerald-400 font-medium">Dueno conectado</p>
             </div>
           </div>
-          <button onClick={() => signOut(auth)} className="p-2 bg-gray-800 rounded-full active:bg-red-500"><LogOut className="w-5 h-5 text-gray-300" /></button>
+          <div className="flex gap-2">
+            <button onClick={() => setShowTutorial(true)} className="p-2 bg-gray-800 rounded-full active:bg-blue-500 transition-colors"><HelpCircle className="w-5 h-5 text-gray-300" /></button>
+            <button onClick={() => signOut(auth)} className="p-2 bg-gray-800 rounded-full active:bg-red-500 transition-colors"><LogOut className="w-5 h-5 text-gray-300" /></button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-hidden relative">
@@ -395,7 +523,6 @@ export default function App() {
           {activeTab === 'caja' && <POSView />}
           {activeTab === 'inventario' && <InventoryView />}
           {activeTab === 'fiados' && <FiadosView />}
-          {showSuccess && <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center text-sm font-bold z-50 animate-bounce"><CheckCircle2 className="w-4 h-4 mr-2" /> Registrado!</div>}
         </div>
 
         <div className="bg-white border-t border-gray-200 flex justify-around p-2 pb-6 sm:pb-4 absolute bottom-0 w-full z-30">
