@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { auth, googleProvider, db } from './firebase';
-import { signInWithPopup, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, arrayUnion } from 'firebase/firestore';
-import { Home, ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, Upload, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info } from 'lucide-react';
+import { auth, db } from './firebase';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, arrayUnion } from 'firebase/firestore';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info, Store, Edit2, Trash2, Receipt, Camera, Loader2 } from 'lucide-react';
 
 const HorseLogo = ({ className = "w-8 h-8" }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -11,6 +12,10 @@ const HorseLogo = ({ className = "w-8 h-8" }) => (
   </svg>
 );
 
+// Gemini IA (vision artificial para leer tickets de mayoristas)
+const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+const genAI = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -18,32 +23,39 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [activeTab, setActiveTab] = useState('caja');
 
-  // Estados de BD
+  // Estados de Base de Datos
   const [inventory, setInventory] = useState([]);
   const [sales, setSales] = useState([]);
   const [fiados, setFiados] = useState([]);
+  const [purchases, setPurchases] = useState([]);
   
-  // Estados UI y Experiencia
+  // Estados de UI
   const [cart, setCart] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCheckout, setShowCheckout] = useState(false);
   const [selectedFiadoId, setSelectedFiadoId] = useState('');
   
-  // Pop-ups y Notificaciones
+  // Notificaciones, tutorial y modales
   const [toastMsg, setToastMsg] = useState(null);
   const [showTutorial, setShowTutorial] = useState(false);
   const [hasSeenPopup, setHasSeenPopup] = useState(false);
   const [showPopup, setShowPopup] = useState(false);
+  const [editProductModal, setEditProductModal] = useState(null);
+  const [newPurchaseModal, setNewPurchaseModal] = useState(false);
 
-  const fileInputRef = useRef(null);
+  // Lector inteligente de tickets
+  const [isScanning, setIsScanning] = useState(false);
+  const [scannedTicket, setScannedTicket] = useState(null);
+  const ticketInputRef = useRef(null);
 
-  // Helper para Tostadas (Explicaciones de acciones)
   const showToast = (msg) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3500);
   };
 
+  // Auth Listener con bloqueo de usuario
   useEffect(() => {
+    if (!auth) { setLoading(false); return; }
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         if (currentUser.email !== 'manux6forever@gmail.com') {
@@ -61,15 +73,17 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Firestore Listeners
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     const unsubInv = onSnapshot(collection(db, 'inventory'), (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubSales = onSnapshot(collection(db, 'sales'), (snap) => setSales(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubFiados = onSnapshot(collection(db, 'fiados'), (snap) => setFiados(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return () => { unsubInv(); unsubSales(); unsubFiados(); };
+    const unsubPurchases = onSnapshot(collection(db, 'purchases'), (snap) => setPurchases(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => { unsubInv(); unsubSales(); unsubFiados(); unsubPurchases(); };
   }, [user]);
 
-  // Logica para descubrir si hay alertas al iniciar (Stock bajo de top vendidos o Fiados pendientes)
+  // Pop-up de alertas al iniciar
   useEffect(() => {
     if (user && !loading && !hasSeenPopup && (inventory.length > 0 || fiados.length > 0)) {
       setShowPopup(true);
@@ -77,18 +91,13 @@ export default function App() {
     }
   }, [user, loading, inventory.length, fiados.length, hasSeenPopup]);
 
-  const handleGoogleLogin = async () => {
-    try { await signInWithPopup(auth, googleProvider); } 
-    catch (error) { alert("Error con Google: " + error.message); }
-  };
-
   const handleEmailLogin = async (e) => {
     e.preventDefault();
     try { await signInWithEmailAndPassword(auth, email, password); } 
-    catch (error) { alert("Error de ingreso. Verifica tu correo y clave."); }
+    catch (error) { alert('Error de ingreso. Verifica tu correo y clave.'); }
   };
 
-  // --- LOGICA DE NEGOCIO ---
+  // --- LOGICA DE CAJA ---
   const cartTotal = cart.reduce((sum, item) => sum + item.subtotal, 0);
 
   const addToCart = (product) => {
@@ -105,17 +114,12 @@ export default function App() {
   };
 
   const processSale = async (method) => {
-    if (cart.length === 0) {
-      return showToast('El carrito esta vacio. Toca algun producto para empezar a cobrar.');
-    }
-    if (method === 'fiado' && !selectedFiadoId) {
-      return showToast('Te olvidaste de elegir a quien fiarle. Selecciona un cliente de la lista.');
-    }
+    if (cart.length === 0) return showToast('El carrito esta vacio. Toca algun producto.');
+    if (method === 'fiado' && !selectedFiadoId) return showToast('Selecciona un cliente para fiarle.');
 
     try {
       await addDoc(collection(db, 'sales'), {
-        items: cart, total: cartTotal, method: method,
-        date: new Date().toISOString(), timestamp: serverTimestamp()
+        items: cart, total: cartTotal, method: method, date: new Date().toISOString(), timestamp: serverTimestamp()
       });
 
       for (const item of cart) {
@@ -130,10 +134,7 @@ export default function App() {
         if (cliente) {
           await updateDoc(doc(db, 'fiados', cliente.id), { 
             totalDebt: cliente.totalDebt + cartTotal,
-            history: arrayUnion({
-              date: new Date().toISOString(),
-              description: `Compra (${cart.length} articulos)`, amount: cartTotal, type: 'cargo'
-            })
+            history: arrayUnion({ date: new Date().toISOString(), description: `Compra (${cart.length} art.)`, amount: cartTotal, type: 'cargo' })
           });
         }
       }
@@ -141,39 +142,101 @@ export default function App() {
       setCart([]);
       setShowCheckout(false);
       showToast('Venta registrada con exito!');
+    } catch (error) { showToast('Hubo un error procesando la venta.'); }
+  };  // --- LOGICA DE IA (ESCANER DE TICKET) ---
+  const fileToGenerativePart = async (file) => {
+    const base64EncodedDataPromise = new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(file);
+    });
+    return { inlineData: { data: await base64EncodedDataPromise, mimeType: file.type } };
+  };
+
+  const handleTicketUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!genAI) {
+      e.target.value = '';
+      return showToast('Falta la API key de Gemini. Agregala en .env como VITE_GEMINI_API_KEY.');
+    }
+
+    setIsScanning(true);
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const imagePart = await fileToGenerativePart(file);
+      const prompt = "Actua como un lector de tickets de mayoristas en Argentina. Analiza esta imagen y extrae los productos comprados. Devuelve UNICAMENTE un arreglo en formato JSON valido, sin texto adicional ni formato markdown. Cada objeto debe tener: 'name' (nombre del producto limpio, sin codigos raros), 'quantity' (cantidad comprada, en numero), 'cost' (precio de costo pagado en total por esa cantidad, en numero). Ignora impuestos, totales o datos del local.";
+
+      const result = await model.generateContent([prompt, imagePart]);
+      let responseText = result.response.text();
+      responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      const parsedItems = JSON.parse(responseText);
+
+      const ticketData = {
+        supplier: "Mayorista (IA)",
+        totalCost: parsedItems.reduce((sum, item) => sum + (Number(item.cost) || 0), 0),
+        items: parsedItems.map(item => ({
+          ...item,
+          id: Date.now() + Math.random(),
+          price: ''
+        }))
+      };
+
+      setScannedTicket(ticketData);
     } catch (error) {
-      showToast('Hubo un error de conexion al procesar la venta.');
+      console.error(error);
+      showToast('La IA no pudo leer el ticket. Saca una foto mas clara.');
+    } finally {
+      setIsScanning(false);
+      e.target.value = '';
     }
   };
 
-  const handleCSVUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target.result;
-        const rows = text.split(/\r?\n/).slice(1);
-        let count = 0;
-        for (let row of rows) {
-          if (!row.trim()) continue;
-          const [name, cost, price, stock] = row.split(',');
-          if (name && price) {
-            await addDoc(collection(db, 'inventory'), {
-              name: name.trim(), cost: Number(cost) || 0, price: Number(price) || 0,
-              stock: Number(stock) || 0, minStock: 5, category: 'General', isService: false
-            });
-            count++;
-          }
+  const confirmScannedTicket = async () => {
+    const missingPrices = scannedTicket.items.some(item => !item.price || item.price <= 0);
+    if (missingPrices) return showToast('Completa el Precio de Venta en todos los productos.');
+
+    try {
+      let detailString = [];
+
+      for (const item of scannedTicket.items) {
+        detailString.push(`${item.quantity} ${item.name}`);
+        const existingProduct = inventory.find(p => p.name.toLowerCase() === item.name.toLowerCase());
+
+        if (existingProduct) {
+          await updateDoc(doc(db, 'inventory', existingProduct.id), {
+            stock: existingProduct.stock + Number(item.quantity),
+            cost: Number(item.cost) / Number(item.quantity),
+            price: Number(item.price)
+          });
+        } else {
+          await addDoc(collection(db, 'inventory'), {
+            name: item.name,
+            stock: Number(item.quantity),
+            cost: Number(item.cost) / Number(item.quantity),
+            price: Number(item.price),
+            minStock: 5, category: 'General', isService: false
+          });
         }
-        showToast(`Se importaron ${count} productos correctamente.`);
-      } catch (error) {
-        showToast('El archivo no tiene el formato correcto. Revisa que sea un CSV valido.');
       }
-      e.target.value = ''; 
-    };
-    reader.readAsText(file);
-  };  // --- VISTAS ---
+
+      await addDoc(collection(db, 'purchases'), {
+        supplier: scannedTicket.supplier,
+        total: scannedTicket.totalCost,
+        details: detailString.join(', '),
+        date: new Date().toISOString()
+      });
+
+      setScannedTicket(null);
+      showToast('Ticket procesado. Stock y gastos actualizados.');
+    } catch (error) {
+      showToast('Error al guardar los datos.');
+    }
+  };
+
+  // --- VISTAS ---
   const POSView = () => (
     <div className="h-full flex flex-col pb-20">
       <div className="p-3 bg-white shadow-sm z-10 relative">
@@ -186,7 +249,7 @@ export default function App() {
       <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 content-start bg-gray-50">
         {inventory.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).map(product => (
           <button key={product.id} onClick={() => addToCart(product)} className="bg-white p-2 rounded-xl shadow-sm flex flex-col items-center justify-center text-center active:scale-95 border border-gray-100 relative">
-            {product.stock <= product.minStock && !product.isService && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
+            {product.stock <= (product.minStock || 5) && !product.isService && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
             <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2">
               {product.isService ? <Printer className="w-5 h-5"/> : <Package className="w-5 h-5"/>}
             </div>
@@ -233,47 +296,198 @@ export default function App() {
         </div>
       )}
     </div>
-  );
+  );  const InventoryView = () => {
+    const handleManualStockChange = async (id, newStockValue) => {
+      const parsedStock = parseInt(newStockValue, 10);
+      if (!isNaN(parsedStock) && parsedStock >= 0) await updateDoc(doc(db, 'inventory', id), { stock: parsedStock });
+    };
 
-  const InventoryView = () => (
-    <div className="p-4 pb-24 h-full overflow-y-auto">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="font-bold text-gray-800 text-lg">Tu Mercaderia</h2>
-        <div className="flex gap-2">
-          <input type="file" accept=".csv" ref={fileInputRef} onChange={handleCSVUpload} className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} className="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold flex items-center"><Upload className="w-4 h-4 mr-1"/> CSV</button>
-          <button onClick={async () => {
-            const name = prompt("Nombre del producto:");
-            if (!name) return;
-            const cost = Number(prompt("Costo de compra:") || 0);
-            const price = Number(prompt("Precio al publico:") || 0);
-            const stock = Number(prompt("Cantidad en stock:") || 0);
-            await addDoc(collection(db, 'inventory'), { name, cost, price, stock, minStock: 5, category: 'General', isService: false });
-          }} className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-lg text-sm font-bold flex items-center"><Plus className="w-4 h-4 mr-1"/> Nuevo</button>
+    return (
+      <div className="p-4 pb-24 h-full overflow-y-auto">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="font-bold text-gray-800 text-lg">Tu Mercaderia</h2>
+          <button onClick={() => setEditProductModal({ isNew: true, name: '', cost: 0, price: 0, stock: 0 })} className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-sm font-bold flex items-center"><Plus className="w-4 h-4 mr-1"/> Nuevo</button>
         </div>
-      </div>
-      
-      <div className="space-y-3">
-        {inventory.map(item => (
-          <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col">
-            <div className="flex justify-between">
-              <span className="font-bold text-gray-800">{item.name}</span>
-              <span className="font-bold text-emerald-600">${item.price}</span>
-            </div>
-            {!item.isService && (
-              <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-50">
-                <span className="text-sm font-medium">Stock: <span className={item.stock <= item.minStock ? 'text-red-500 font-bold' : ''}>{item.stock}</span></span>
-                <div className="flex gap-2">
-                  <button onClick={() => updateDoc(doc(db, 'inventory', item.id), { stock: Math.max(0, item.stock - 1)})} className="bg-gray-100 p-1.5 rounded"><Minus className="w-4 h-4"/></button>
-                  <button onClick={() => updateDoc(doc(db, 'inventory', item.id), { stock: item.stock + 1})} className="bg-emerald-50 text-emerald-600 p-1.5 rounded"><Plus className="w-4 h-4"/></button>
+        
+        <div className="space-y-3">
+          {inventory.map(item => (
+            <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col">
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <span className="font-bold text-gray-800 block">{item.name}</span>
+                  <span className="text-xs text-gray-500">Costo Ref: ${item.cost?.toFixed(2) || 0}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-emerald-600">${item.price}</span>
+                  <button onClick={() => setEditProductModal({ ...item, isNew: false })} className="text-blue-500 bg-blue-50 p-1.5 rounded-md"><Edit2 className="w-4 h-4"/></button>
+                  <button onClick={async () => { if(window.confirm(`Borrar ${item.name}?`)) await deleteDoc(doc(db, 'inventory', item.id)); }} className="text-red-500 bg-red-50 p-1.5 rounded-md"><Trash2 className="w-4 h-4"/></button>
                 </div>
               </div>
-            )}
+              
+              {!item.isService && (
+                <div className="flex justify-between items-center mt-2 pt-3 border-t border-gray-50">
+                  <span className="text-sm font-medium text-gray-600">Stock (U):</span>
+                  <div className="flex gap-1 items-center">
+                    <button onClick={() => updateDoc(doc(db, 'inventory', item.id), { stock: Math.max(0, item.stock - 1)})} className="bg-gray-100 p-2 rounded-lg active:bg-gray-200"><Minus className="w-4 h-4"/></button>
+                    <input type="number" defaultValue={item.stock} onBlur={(e) => handleManualStockChange(item.id, e.target.value)} className={`w-16 text-center font-bold bg-gray-50 border border-gray-200 rounded-lg py-1.5 outline-none focus:border-emerald-500 focus:bg-white ${item.stock <= (item.minStock || 5) ? 'text-red-500' : 'text-gray-800'}`} />
+                    <button onClick={() => updateDoc(doc(db, 'inventory', item.id), { stock: item.stock + 1})} className="bg-emerald-50 text-emerald-600 p-2 rounded-lg active:bg-emerald-100"><Plus className="w-4 h-4"/></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {editProductModal && (
+          <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white w-full rounded-3xl p-6 relative">
+              <button onClick={() => setEditProductModal(null)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+              <h2 className="text-xl font-bold mb-4">{editProductModal.isNew ? 'Nuevo Producto' : 'Editar Producto'}</h2>
+              <div className="space-y-3">
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Nombre</label><input type="text" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editProductModal.name} onChange={e => setEditProductModal({...editProductModal, name: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="text-xs text-gray-500 font-bold uppercase">Costo Unid. ($)</label><input type="number" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editProductModal.cost} onChange={e => setEditProductModal({...editProductModal, cost: Number(e.target.value)})} /></div>
+                  <div><label className="text-xs text-gray-500 font-bold uppercase">Precio Venta ($)</label><input type="number" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editProductModal.price} onChange={e => setEditProductModal({...editProductModal, price: Number(e.target.value)})} /></div>
+                </div>
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Stock Actual (Unidades)</label><input type="number" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editProductModal.stock} onChange={e => setEditProductModal({...editProductModal, stock: Number(e.target.value)})} /></div>
+                
+                <button onClick={async () => {
+                  if (!editProductModal.name || editProductModal.price <= 0) return showToast('Completa nombre y precio.');
+                  const pData = { name: editProductModal.name, cost: editProductModal.cost, price: editProductModal.price, stock: editProductModal.stock, minStock: 5, category: 'General', isService: false };
+                  if (editProductModal.isNew) await addDoc(collection(db, 'inventory'), pData);
+                  else await updateDoc(doc(db, 'inventory', editProductModal.id), pData);
+                  setEditProductModal(null); showToast('Guardado.');
+                }} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl mt-2">Guardar</button>
+              </div>
+            </div>
           </div>
-        ))}
+        )}
       </div>
-    </div>
-  );  const FiadosView = () => {
+    );
+  };
+
+  const ComprasView = () => {
+    return (
+      <div className="p-4 pb-24 h-full overflow-y-auto">
+        {scannedTicket && (
+          <div className="absolute inset-0 bg-white z-50 flex flex-col h-full">
+            <div className="bg-gray-900 text-white p-4 flex justify-between items-center shadow-md">
+              <h2 className="font-bold">Revision de IA</h2>
+              <button onClick={() => setScannedTicket(null)} className="p-2 bg-gray-800 rounded-full"><X className="w-5 h-5"/></button>
+            </div>
+            
+            <div className="p-4 flex-1 overflow-y-auto">
+              <div className="bg-blue-50 text-blue-800 p-3 rounded-xl text-sm mb-4 border border-blue-100 flex">
+                <Info className="w-5 h-5 mr-2 shrink-0"/> Esto es lo que leyo el sistema. Corregi si hay algun error y agrega el <b>Precio de Venta</b>.
+              </div>
+              
+              <div className="mb-4">
+                <label className="text-xs font-bold text-gray-500 uppercase">Mayorista</label>
+                <input type="text" className="w-full border-b-2 border-gray-200 py-2 font-bold text-gray-800 outline-none focus:border-blue-500" value={scannedTicket.supplier} onChange={e => setScannedTicket({...scannedTicket, supplier: e.target.value})} />
+              </div>
+
+              <div className="space-y-4">
+                {scannedTicket.items.map((item, index) => (
+                  <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm relative">
+                    <button onClick={() => {
+                      const newItems = scannedTicket.items.filter(i => i.id !== item.id);
+                      setScannedTicket({...scannedTicket, items: newItems});
+                    }} className="absolute -top-2 -right-2 bg-red-100 text-red-600 p-1.5 rounded-full shadow-sm"><Trash2 className="w-4 h-4"/></button>
+                    
+                    <input type="text" className="w-full font-bold text-gray-800 border-b border-gray-100 pb-1 mb-2 outline-none" value={item.name} onChange={e => {
+                      const newItems = [...scannedTicket.items];
+                      newItems[index].name = e.target.value;
+                      setScannedTicket({...scannedTicket, items: newItems});
+                    }} />
+                    
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Cant (U)</span>
+                        <input type="number" className="w-full bg-gray-50 rounded p-2 text-sm font-medium" value={item.quantity} onChange={e => {
+                          const newItems = [...scannedTicket.items]; newItems[index].quantity = e.target.value; setScannedTicket({...scannedTicket, items: newItems});
+                        }} />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase">Costo T.</span>
+                        <input type="number" className="w-full bg-gray-50 rounded p-2 text-sm font-medium" value={item.cost} onChange={e => {
+                          const newItems = [...scannedTicket.items]; newItems[index].cost = e.target.value; setScannedTicket({...scannedTicket, items: newItems});
+                        }} />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-emerald-600 font-bold uppercase">Venta (U)</span>
+                        <input type="number" placeholder="$" className="w-full bg-emerald-50 border border-emerald-200 rounded p-2 text-sm font-bold text-emerald-700 outline-none focus:ring-2 ring-emerald-500" value={item.price} onChange={e => {
+                          const newItems = [...scannedTicket.items]; newItems[index].price = e.target.value; setScannedTicket({...scannedTicket, items: newItems});
+                        }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            <div className="p-4 bg-gray-50 border-t border-gray-200 pb-8">
+              <button onClick={confirmScannedTicket} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl flex items-center justify-center text-lg">
+                <CheckCircle2 className="w-5 h-5 mr-2"/> Confirmar Ticket
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="font-bold text-gray-800 text-lg">Compras Mayoristas</h2>
+          <div className="flex gap-2">
+            <input type="file" accept="image/*" capture="environment" ref={ticketInputRef} onChange={handleTicketUpload} className="hidden" />
+            <button onClick={() => ticketInputRef.current?.click()} disabled={isScanning} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold flex items-center shadow-md disabled:opacity-50">
+              {isScanning ? <Loader2 className="w-4 h-4 mr-1 animate-spin"/> : <Camera className="w-4 h-4 mr-1"/>}
+              {isScanning ? 'Leyendo IA...' : 'Escanear Ticket'}
+            </button>
+            <button onClick={() => setNewPurchaseModal(true)} className="bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-bold flex items-center"><Plus className="w-4 h-4"/></button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {purchases.length === 0 ? (
+            <div className="text-center text-gray-400 mt-10 text-sm px-4">Aca vas a ver los tickets de tus compras en el mayorista. Usa la camara para leerlos automaticamente.</div>
+          ) : (
+            purchases.slice().sort((a,b) => new Date(b.date) - new Date(a.date)).map(purchase => (
+              <div key={purchase.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center"><Store className="w-4 h-4 text-gray-400 mr-2"/><span className="font-bold text-gray-800">{purchase.supplier}</span></div>
+                  <span className="font-bold text-red-500">-${purchase.total}</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">{new Date(purchase.date).toLocaleDateString()}</p>
+                <div className="bg-gray-50 p-2 rounded border border-gray-100 text-sm text-gray-700 italic leading-snug line-clamp-2">"{purchase.details}"</div>
+                <div className="flex justify-end mt-2">
+                  <button onClick={async () => { if(window.confirm('Borrar ticket?')) await deleteDoc(doc(db, 'purchases', purchase.id)); }} className="text-xs text-red-500 flex items-center font-medium"><Trash2 className="w-3 h-3 mr-1"/> Eliminar</button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {newPurchaseModal && (
+          <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white w-full rounded-3xl p-6 relative">
+              <button onClick={() => setNewPurchaseModal(false)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+              <h2 className="text-xl font-bold mb-4">Gasto Manual</h2>
+              <div className="space-y-4">
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Lugar</label><input type="text" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" id="mSupplier" /></div>
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Monto ($)</label><input type="number" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" id="mTotal" /></div>
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Detalle</label><textarea rows="3" className="w-full bg-gray-50 border p-3 rounded-xl mt-1 resize-none" id="mDetails"></textarea></div>
+                
+                <button onClick={async () => {
+                  const s = document.getElementById('mSupplier').value; const t = document.getElementById('mTotal').value; const d = document.getElementById('mDetails').value;
+                  if (!s || !t) return showToast('Completa lugar y monto.');
+                  await addDoc(collection(db, 'purchases'), { supplier: s, total: Number(t), details: d, date: new Date().toISOString() });
+                  setNewPurchaseModal(false); showToast('Guardado.');
+                }} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl mt-2">Guardar</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };  const FiadosView = () => {
     const [expandedId, setExpandedId] = useState(null);
 
     return (
@@ -292,28 +506,28 @@ export default function App() {
               <div className="p-4 flex flex-col">
                 <div className="flex justify-between mb-3 items-center">
                   <span className="font-bold text-gray-800">{cliente.name}</span>
-                  <span className="font-bold text-orange-600 text-lg">${cliente.totalDebt}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="font-bold text-orange-600 text-lg">${cliente.totalDebt}</span>
+                    <button onClick={async () => { if(window.confirm('Eliminar a ' + cliente.name + '?')) await deleteDoc(doc(db, 'fiados', cliente.id)); }} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    const val = prompt(`¿Cuanto entrega ${cliente.name}? (Debe: $${cliente.totalDebt})`);
-                    if (!val) return;
-                    const pago = Number(val);
-                    if (isNaN(pago) || pago <= 0) return showToast("Por favor ingresa un monto valido (solo numeros).");
-                    
+                    const val = prompt(`Cuanto entrega ${cliente.name}? (Debe: $${cliente.totalDebt})`);
+                    if (!val) return; const pago = Number(val);
+                    if (isNaN(pago) || pago <= 0) return showToast('Monto invalido.');
                     await updateDoc(doc(db, 'fiados', cliente.id), { 
                       totalDebt: Math.max(0, cliente.totalDebt - pago),
                       history: arrayUnion({ date: new Date().toISOString(), description: 'Abono de deuda', amount: pago, type: 'pago' })
                     });
-                    showToast(`Se descontaron $${pago} de la cuenta de ${cliente.name}.`);
-                  }} className="flex-1 bg-green-50 text-green-700 py-2 rounded-lg font-semibold text-sm">Registrar Pago</button>
-                  
+                    showToast(`Se descontaron $${pago} de ${cliente.name}.`);
+                  }} className="flex-1 bg-green-50 text-green-700 py-2 rounded-lg font-semibold text-sm">Abonar</button>
                   <button onClick={() => setExpandedId(expandedId === cliente.id ? null : cliente.id)} className="bg-gray-100 p-2 rounded-lg text-gray-600">
                     {expandedId === cliente.id ? <ChevronUp className="w-5 h-5"/> : <ChevronDown className="w-5 h-5"/>}
                   </button>
                 </div>
               </div>
-              
+
               {expandedId === cliente.id && (
                 <div className="bg-gray-50 p-4 border-t border-gray-100 text-sm">
                   <p className="font-bold text-gray-500 mb-2 text-xs uppercase tracking-wider">Historial</p>
@@ -339,16 +553,13 @@ export default function App() {
         </div>
       </div>
     );
-  };
-
-  const DashboardView = () => {
-    const [statPeriod, setStatPeriod] = useState('semana'); // 'semana' o 'mes'
+  };  const DashboardView = () => {
+    const [statPeriod, setStatPeriod] = useState('semana');
 
     const today = new Date().toDateString();
     const todaySales = sales.filter(s => new Date(s.date).toDateString() === today);
     const totalEfectivo = todaySales.filter(s => s.method === 'efectivo').reduce((acc, s) => acc + s.total, 0);
 
-    // Calculo Top 15 Vendidos
     const getTopProducts = (days) => {
       const limitDate = new Date(new Date().getTime() - days * 24 * 60 * 60 * 1000);
       const periodSales = sales.filter(s => new Date(s.date) >= limitDate);
@@ -367,12 +578,11 @@ export default function App() {
     return (
       <div className="p-4 space-y-6 pb-24 overflow-y-auto h-full">
         <div className="bg-emerald-600 text-white rounded-2xl p-5 shadow-lg">
-          <p className="text-emerald-100 text-sm font-medium">Recaudacion Hoy (Caja)</p>
+          <p className="text-emerald-100 text-sm font-medium">Caja Fisica (Hoy)</p>
           <h2 className="text-4xl font-bold mt-1">${totalEfectivo}</h2>
           <p className="mt-4 text-emerald-50 text-sm border-t border-emerald-500 pt-3">Tickets cobrados hoy: {todaySales.length}</p>
         </div>
         
-        {/* Estadisticas de mas vendidos */}
         <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-bold text-gray-800 flex items-center"><Trophy className="w-5 h-5 mr-2 text-yellow-500" /> Top 15 Vendidos</h3>
@@ -388,16 +598,15 @@ export default function App() {
                 <span className="text-sm text-gray-700"><span className="text-gray-400 font-bold mr-2">{i+1}.</span>{p.name}</span>
                 <span className="text-sm font-bold bg-emerald-50 text-emerald-600 px-2 rounded">{p.qty} unid.</span>
               </div>
-            )) : <p className="text-xs text-gray-400">Aun no hay suficientes ventas registradas para armar el ranking.</p>}
+            )) : <p className="text-xs text-gray-400">Aun no hay suficientes ventas para armar el ranking.</p>}
           </div>
         </div>
       </div>
     );
-  };  // Pop-up de Alertas Inteligentes (Render)
+  };  // Pop-up de Alertas Inteligentes
   const renderAlertsPopup = () => {
     if (!showPopup) return null;
 
-    // Calcular que mostrar en el pop-up
     const top7Days = (() => {
       const limit = new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000);
       const periodSales = sales.filter(s => new Date(s.date) >= limit);
@@ -448,7 +657,7 @@ export default function App() {
     );
   };
 
-  // Render Tutorial (Ayuda)
+  // Tutorial (Ayuda)
   const renderTutorial = () => {
     if (!showTutorial) return null;
     return (
@@ -458,18 +667,16 @@ export default function App() {
           <div className="flex items-center mb-6"><Info className="w-6 h-6 text-blue-500 mr-2"/><h2 className="text-xl font-bold">Como usar la App?</h2></div>
           
           <div className="space-y-4 text-sm text-gray-700">
-            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">1</span><p><strong>Stock:</strong> Agrega tus productos de a uno o subiendo un archivo Excel (.csv). Si no cargas stock, la Caja estara vacia.</p></div>
-            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">2</span><p><strong>Caja:</strong> Toca los productos para venderlos (se armara un carrito). Luego dale a "Cobrar" y elegi si pagan en Efectivo o se anota en libreta.</p></div>
-            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">3</span><p><strong>Fiados:</strong> Crea clientes o profesores nuevos. Cuando te paguen, toca "Registrar Pago" para que se descuente la deuda y quede el registro.</p></div>
-            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">4</span><p><strong>Resumen:</strong> Mira la plata que entra en el dia, el Top 15 de lo mas vendido y recibe alertas automaticas.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">1</span><p><strong>Stock:</strong> Agrega productos con el boton "Nuevo" o escanea tickets de compra para cargarlos automaticamente.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">2</span><p><strong>Caja:</strong> Toca productos para venderlos. Dale "Cobrar" y elegi Efectivo o Fiado.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">3</span><p><strong>Compras:</strong> Saca foto a los tickets del mayorista y la IA lee los productos. Revisa y confirma.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">4</span><p><strong>Fiados:</strong> Crea clientes, fia ventas y registra pagos. Todo queda en el historial.</p></div>
+            <div className="flex"><span className="bg-emerald-100 text-emerald-700 font-bold w-6 h-6 flex items-center justify-center rounded-full mr-3 shrink-0">5</span><p><strong>Resumen:</strong> Mira la plata del dia y el Top 15 de lo mas vendido.</p></div>
           </div>
         </div>
       </div>
     );
-  };
-
-  // Pantallas de Carga y Login
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-200 font-bold text-gray-500">Iniciando Kiosco...</div>;
+  };  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-200 font-bold text-gray-500">Iniciando Kiosco...</div>;
 
   if (!user) {
     return (
@@ -493,25 +700,14 @@ export default function App() {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-200">
-      <div className="w-full max-w-md bg-gray-50 h-[100dvh] shadow-2xl relative flex flex-col sm:rounded-[2.5rem] sm:border-[8px] border-gray-900 overflow-hidden">
+      <div className="w-full max-w-md bg-gray-50 h-[100dvh] shadow-2xl relative flex flex-col overflow-hidden">
         
-        {/* Tostada Flotante para errores o confirmaciones */}
-        {toastMsg && (
-          <div className="absolute top-20 left-4 right-4 bg-gray-900 text-white p-3 rounded-xl text-sm font-medium shadow-xl z-[70] animate-in fade-in slide-in-from-top-5">
-            {toastMsg}
-          </div>
-        )}
-
+        {toastMsg && <div className="absolute top-20 left-4 right-4 bg-gray-900 text-white p-3 rounded-xl text-sm font-medium shadow-xl z-[70]">{toastMsg}</div>}
         {renderAlertsPopup()}
         {renderTutorial()}
 
         <div className="bg-gray-900 text-white pt-6 pb-4 px-4 flex justify-between items-center shadow-md z-10">
-          <div className="flex items-center">
-            <div className="bg-emerald-500 p-2 rounded-xl mr-3"><HorseLogo className="w-6 h-6 text-white" /></div>
-            <div>
-              <h1 className="font-black text-lg tracking-wide">KIOSCO MANUEL</h1>
-            </div>
-          </div>
+          <div className="flex items-center"><div className="bg-emerald-500 p-2 rounded-xl mr-3"><HorseLogo className="w-6 h-6 text-white" /></div><h1 className="font-black text-lg tracking-wide">KIOSCO MANUEL</h1></div>
           <div className="flex gap-2">
             <button onClick={() => setShowTutorial(true)} className="p-2 bg-gray-800 rounded-full active:bg-blue-500 transition-colors"><HelpCircle className="w-5 h-5 text-gray-300" /></button>
             <button onClick={() => signOut(auth)} className="p-2 bg-gray-800 rounded-full active:bg-red-500 transition-colors"><LogOut className="w-5 h-5 text-gray-300" /></button>
@@ -522,6 +718,7 @@ export default function App() {
           {activeTab === 'resumen' && <DashboardView />}
           {activeTab === 'caja' && <POSView />}
           {activeTab === 'inventario' && <InventoryView />}
+          {activeTab === 'compras' && <ComprasView />}
           {activeTab === 'fiados' && <FiadosView />}
         </div>
 
@@ -530,14 +727,15 @@ export default function App() {
             { id: 'resumen', icon: TrendingUp, label: 'Resumen' },
             { id: 'caja', icon: ShoppingCart, label: 'Caja' },
             { id: 'inventario', icon: Package, label: 'Stock' },
+            { id: 'compras', icon: Receipt, label: 'Compras' },
             { id: 'fiados', icon: BookOpen, label: 'Fiados' }
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-colors ${isActive ? 'text-emerald-600 bg-emerald-50' : 'text-gray-400'}`}>
-                <Icon className={`w-6 h-6 mb-1 ${isActive ? 'stroke-[2.5px]' : ''}`} />
-                <span className="text-[10px] font-medium">{tab.label}</span>
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center justify-center w-[18%] h-14 rounded-xl transition-colors ${isActive ? 'text-emerald-600 bg-emerald-50' : 'text-gray-400'}`}>
+                <Icon className={`w-5 h-5 mb-1 ${isActive ? 'stroke-[2.5px]' : ''}`} />
+                <span className="text-[9px] font-bold">{tab.label}</span>
               </button>
             )
           })}
