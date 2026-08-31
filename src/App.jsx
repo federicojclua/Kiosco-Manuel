@@ -208,7 +208,7 @@ export default function App() {
 
     setIsScanning(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", generationConfig: { responseMimeType: "application/json" } });
       const imagePart = await fileToGenerativePart(file);
       const prompt = "Actua como un lector de tickets de mayoristas en Argentina. Analiza esta imagen y extrae los productos comprados. Devuelve UNICAMENTE un arreglo en formato JSON valido, sin texto adicional ni formato markdown. Cada objeto debe tener: 'name' (nombre del producto limpio, sin codigos raros), 'quantity' (cantidad comprada, en numero), 'cost' (precio de costo pagado en total por esa cantidad, en numero). Ignora impuestos, totales o datos del local.";
 
@@ -231,7 +231,7 @@ export default function App() {
       setScannedTicket(ticketData);
     } catch (error) {
       console.error(error);
-      showToast('La IA no pudo leer el ticket. Saca una foto mas clara.');
+      showToast('Error IA: ' + (error.message || 'No se pudo leer la factura'));
     } finally {
       setIsScanning(false);
       e.target.value = '';
@@ -892,7 +892,7 @@ export default function App() {
 
         <div className="flex-1 overflow-hidden relative">
           {activeTab === 'resumen' && <DashboardView />}
-          {activeTab === 'caja' && <POSView />}
+          {activeTab === 'caja' && POSView()}
           {activeTab === 'inventario' && <InventoryView />}
           {activeTab === 'compras' && <ComprasView />}
           {activeTab === 'fiados' && <FiadosView />}
