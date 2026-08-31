@@ -28,6 +28,7 @@ export default function App() {
   const [sales, setSales] = useState([]);
   const [fiados, setFiados] = useState([]);
   const [purchases, setPurchases] = useState([]);
+  const [arqueos, setArqueos] = useState([]);
   
   // Estados de UI
   const [cart, setCart] = useState([]);
@@ -42,6 +43,9 @@ export default function App() {
   const [showPopup, setShowPopup] = useState(false);
   const [editProductModal, setEditProductModal] = useState(null);
   const [newPurchaseModal, setNewPurchaseModal] = useState(false);
+  const [editPurchaseModal, setEditPurchaseModal] = useState(null);
+  const [showArqueoModal, setShowArqueoModal] = useState(false);
+  const [arqueoActual, setArqueoActual] = useState('');
 
   // Lector inteligente de tickets
   const [isScanning, setIsScanning] = useState(false);
@@ -80,7 +84,8 @@ export default function App() {
     const unsubSales = onSnapshot(collection(db, 'sales'), (snap) => setSales(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubFiados = onSnapshot(collection(db, 'fiados'), (snap) => setFiados(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubPurchases = onSnapshot(collection(db, 'purchases'), (snap) => setPurchases(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return () => { unsubInv(); unsubSales(); unsubFiados(); unsubPurchases(); };
+    const unsubArqueos = onSnapshot(collection(db, 'arqueos'), (snap) => setArqueos(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => { unsubInv(); unsubSales(); unsubFiados(); unsubPurchases(); unsubArqueos(); };
   }, [user]);
 
   // Pop-up de alertas al iniciar
@@ -95,6 +100,25 @@ export default function App() {
     e.preventDefault();
     try { await signInWithEmailAndPassword(auth, email, password); } 
     catch (error) { alert('Error de ingreso. Verifica tu correo y clave.'); }
+  };
+
+  const saveArqueo = async () => {
+    const actual = Number(arqueoActual);
+    if (isNaN(actual) || actual < 0) return showToast('Ingresa un monto de caja valido.');
+    const todayStr = new Date().toDateString();
+    const expected = sales.filter(s => new Date(s.date).toDateString() === todayStr && s.method === 'efectivo').reduce((a, s) => a + s.total, 0);
+    const diff = actual - expected;
+    await addDoc(collection(db, 'arqueos'), { date: new Date().toISOString(), expected, actual, difference: diff });
+    setArqueoActual('');
+    setShowArqueoModal(false);
+    showToast(`Arqueo guardado. Diferencia: $${diff}`);
+  };
+
+  const saveEditedPurchase = async () => {
+    if (!editPurchaseModal || !editPurchaseModal.supplier || !editPurchaseModal.total) return showToast('Completa lugar y monto.');
+    await updateDoc(doc(db, 'purchases', editPurchaseModal.id), { supplier: editPurchaseModal.supplier, total: Number(editPurchaseModal.total), details: editPurchaseModal.details });
+    setEditPurchaseModal(null);
+    showToast('Compra actualizada.');
   };
 
   // --- LOGICA DE CAJA ---
@@ -489,6 +513,17 @@ export default function App() {
           </div>
         </div>
 
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-4 flex justify-between items-center">
+          <div>
+            <p className="text-xs text-blue-700 font-bold uppercase">Gastado este mes</p>
+            <p className="text-2xl font-extrabold text-blue-800">${purchases.filter(p => new Date(p.date).getMonth() === new Date().getMonth() && new Date(p.date).getFullYear() === new Date().getFullYear()).reduce((a, p) => a + (Number(p.total) || 0), 0)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-blue-700 font-bold uppercase">Compras del mes</p>
+            <p className="text-2xl font-extrabold text-blue-800">{purchases.filter(p => new Date(p.date).getMonth() === new Date().getMonth() && new Date(p.date).getFullYear() === new Date().getFullYear()).length}</p>
+          </div>
+        </div>
+
         <div className="space-y-3">
           {purchases.length === 0 ? (
             <div className="text-center text-gray-400 mt-10 text-sm px-4">Aca vas a ver los tickets de tus compras en el mayorista. Usa la camara para leerlos automaticamente.</div>
@@ -501,7 +536,8 @@ export default function App() {
                 </div>
                 <p className="text-xs text-gray-500 mb-2">{new Date(purchase.date).toLocaleDateString()}</p>
                 <div className="bg-gray-50 p-2 rounded border border-gray-100 text-sm text-gray-700 italic leading-snug line-clamp-2">"{purchase.details}"</div>
-                <div className="flex justify-end mt-2">
+                <div className="flex justify-end mt-2 gap-3">
+                  <button onClick={() => setEditPurchaseModal(purchase)} className="text-xs text-blue-500 flex items-center font-medium"><Edit2 className="w-3 h-3 mr-1"/> Editar</button>
                   <button onClick={async () => { if(window.confirm('Borrar ticket?')) await deleteDoc(doc(db, 'purchases', purchase.id)); }} className="text-xs text-red-500 flex items-center font-medium"><Trash2 className="w-3 h-3 mr-1"/> Eliminar</button>
                 </div>
               </div>
@@ -525,6 +561,21 @@ export default function App() {
                   await addDoc(collection(db, 'purchases'), { supplier: s, total: Number(t), details: d, date: new Date().toISOString() });
                   setNewPurchaseModal(false); showToast('Guardado.');
                 }} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl mt-2">Guardar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editPurchaseModal && (
+          <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+            <div className="bg-white w-full rounded-3xl p-6 relative">
+              <button onClick={() => setEditPurchaseModal(null)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+              <h2 className="text-xl font-bold mb-4">Editar Compra</h2>
+              <div className="space-y-4">
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Lugar</label><input type="text" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editPurchaseModal.supplier} onChange={e => setEditPurchaseModal({...editPurchaseModal, supplier: e.target.value})} /></div>
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Monto ($)</label><input type="number" className="w-full bg-gray-50 border p-3 rounded-xl mt-1" value={editPurchaseModal.total} onChange={e => setEditPurchaseModal({...editPurchaseModal, total: e.target.value})} /></div>
+                <div><label className="text-xs text-gray-500 font-bold uppercase">Detalle</label><textarea rows="3" className="w-full bg-gray-50 border p-3 rounded-xl mt-1 resize-none" value={editPurchaseModal.details} onChange={e => setEditPurchaseModal({...editPurchaseModal, details: e.target.value})}></textarea></div>
+                <button onClick={saveEditedPurchase} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl mt-2">Guardar</button>
               </div>
             </div>
           </div>
@@ -619,12 +670,24 @@ export default function App() {
 
     const topProducts = getTopProducts(statPeriod === 'semana' ? 7 : 30);
 
+    const getWeeklyVelocity = () => {
+      const limit = new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000);
+      const periodSales = sales.filter(s => new Date(s.date) >= limit);
+      const counts = {};
+      periodSales.forEach(sale => sale.items.forEach(item => { counts[item.product.id] = (counts[item.product.id] || 0) + item.quantity; }));
+      return counts;
+    };
+    const weeklyVelocity = getWeeklyVelocity();
+    const repoSuggestions = inventory.filter(p => !p.isService && (weeklyVelocity[p.id] || 0) > 0 && p.stock < (weeklyVelocity[p.id] * 2)).map(p => ({ ...p, vel: weeklyVelocity[p.id] || 0, sugerido: Math.max(1, (weeklyVelocity[p.id] || 0) * 2 - p.stock) }));
+    const criticalStock = inventory.filter(p => !p.isService && p.stock <= (p.minStock || 5));
+
     return (
       <div className="p-4 space-y-6 pb-24 overflow-y-auto h-full">
         <div className="bg-emerald-600 text-white rounded-2xl p-5 shadow-lg">
           <p className="text-emerald-100 text-sm font-medium">Caja Fisica (Hoy)</p>
           <h2 className="text-4xl font-bold mt-1">${totalEfectivo}</h2>
           <p className="mt-4 text-emerald-50 text-sm border-t border-emerald-500 pt-3">Tickets cobrados hoy: {todaySales.length}</p>
+          <button onClick={() => setShowArqueoModal(true)} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white font-bold py-2 rounded-xl text-sm">Arqueo de Caja</button>
         </div>
         
         <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
@@ -644,6 +707,26 @@ export default function App() {
               </div>
             )) : <p className="text-xs text-gray-400">Aun no hay suficientes ventas para armar el ranking.</p>}
           </div>
+        </div>
+        <div className="bg-white rounded-2xl shadow-sm p-4 border border-orange-100">
+          <h3 className="font-bold text-gray-800 flex items-center mb-3"><AlertCircle className="w-5 h-5 mr-2 text-orange-500" /> Stock Critico</h3>
+          {criticalStock.length > 0 ? criticalStock.map(p => (
+            <div key={p.id} className="flex justify-between text-sm py-1.5 border-b border-gray-50">
+              <span className="text-gray-700">{p.name}</span>
+              <span className="font-bold text-red-500">Quedan {p.stock}</span>
+            </div>
+          )) : <p className="text-sm text-gray-400">Todo en orden.</p>}
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm p-4 border border-emerald-100">
+          <h3 className="font-bold text-gray-800 flex items-center mb-2"><TrendingUp className="w-5 h-5 mr-2 text-emerald-500" /> Sugerencia de Compra</h3>
+          <p className="text-xs text-gray-500 mb-3">Basado en lo que mas vendiste esta semana:</p>
+          {repoSuggestions.length > 0 ? repoSuggestions.map(p => (
+            <div key={p.id} className="flex justify-between text-sm py-2 border-b border-gray-50">
+              <span className="text-gray-700">{p.name} <span className="text-gray-400 text-xs">(vendes {p.vel}/sem)</span></span>
+              <span className="font-bold text-emerald-600">Comprar ~{p.sugerido} u.</span>
+            </div>
+          )) : <p className="text-sm text-gray-400">Sin sugerencias por ahora.</p>}
         </div>
       </div>
     );
@@ -749,6 +832,47 @@ export default function App() {
         {toastMsg && <div className="absolute top-20 left-4 right-4 bg-gray-900 text-white p-3 rounded-xl text-sm font-medium shadow-xl z-[70]">{toastMsg}</div>}
         {renderAlertsPopup()}
         {renderTutorial()}
+
+        {showArqueoModal && (() => {
+          const todayStr = new Date().toDateString();
+          const expected = sales.filter(s => new Date(s.date).toDateString() === todayStr && s.method === 'efectivo').reduce((a, s) => a + s.total, 0);
+          const actual = Number(arqueoActual) || 0;
+          const diff = actual - expected;
+          return (
+            <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full rounded-3xl p-6 relative max-h-[85vh] overflow-y-auto">
+                <button onClick={() => setShowArqueoModal(false)} className="absolute top-4 right-4 bg-gray-100 p-2 rounded-full"><X className="w-5 h-5"/></button>
+                <h2 className="text-xl font-bold mb-4">Arqueo de Caja</h2>
+                <div className="bg-gray-50 p-3 rounded-xl mb-3">
+                  <p className="text-sm text-gray-500">Ventas en efectivo hoy (esperado)</p>
+                  <p className="text-2xl font-bold text-gray-800">${expected}</p>
+                </div>
+                <div className="mb-4">
+                  <label className="text-xs text-gray-500 font-bold uppercase">Efectivo contado en caja ($)</label>
+                  <input type="number" inputMode="decimal" className="w-full bg-gray-50 border p-3 rounded-xl mt-1 text-lg font-bold" value={arqueoActual} onChange={e => setArqueoActual(e.target.value)} placeholder="0" />
+                </div>
+                <div className="bg-emerald-50 p-3 rounded-xl mb-4 flex justify-between">
+                  <span className="text-sm font-medium text-gray-600">Diferencia</span>
+                  <span className={`font-bold ${diff >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{diff >= 0 ? '+' : ''}${diff}</span>
+                </div>
+                <button onClick={saveArqueo} className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl mb-4">Guardar Arqueo</button>
+                {arqueos.length > 0 && (
+                  <div>
+                    <p className="text-xs font-bold text-gray-500 uppercase mb-2">Ultimos arqueos</p>
+                    <div className="space-y-2">
+                      {[...arqueos].reverse().slice(0, 5).map(a => (
+                        <div key={a.id} className="flex justify-between text-sm border-b border-gray-100 pb-1">
+                          <span className="text-gray-500">{new Date(a.date).toLocaleDateString()} {new Date(a.date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                          <span className={`font-bold ${a.difference >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{a.difference >= 0 ? '+' : ''}${a.difference}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="bg-gray-900 text-white pt-6 pb-4 px-4 flex justify-between items-center shadow-md z-10">
           <div className="flex items-center"><div className="bg-emerald-500 p-2 rounded-xl mr-3"><HorseLogo className="w-6 h-6 text-white" /></div><h1 className="font-black text-lg tracking-wide">KIOSCO MANUEL</h1></div>
