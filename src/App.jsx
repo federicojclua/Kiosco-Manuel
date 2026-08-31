@@ -113,6 +113,25 @@ export default function App() {
     });
   };
 
+  const decreaseFromCart = (productId) => {
+    setCart(prev => {
+      const existing = prev.find(item => item.product.id === productId);
+      if (!existing) return prev;
+      if (existing.quantity === 1) {
+        return prev.filter(item => item.product.id !== productId);
+      }
+      return prev.map(item =>
+        item.product.id === productId
+          ? { ...item, quantity: item.quantity - 1, subtotal: (item.quantity - 1) * item.product.price }
+          : item
+      );
+    });
+  };
+
+  const removeFromCart = (productId) => {
+    setCart(prev => prev.filter(item => item.product.id !== productId));
+  };
+
   const processSale = async (method) => {
     if (cart.length === 0) return showToast('El carrito esta vacio. Toca algun producto.');
     if (method === 'fiado' && !selectedFiadoId) return showToast('Selecciona un cliente para fiarle.');
@@ -261,12 +280,37 @@ export default function App() {
 
       {cart.length > 0 && (
         <div className="absolute bottom-16 left-0 w-full p-3 z-20">
-          <div className="bg-gray-900 rounded-2xl shadow-2xl p-4 text-white">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-gray-400 text-sm">{cart.length} items</span>
+          <div className="bg-gray-900 rounded-2xl shadow-2xl p-4 text-white flex flex-col max-h-[50vh]">
+            <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-700">
+              <span className="text-gray-300 text-sm font-bold">Resumen de Venta</span>
+              <button onClick={() => setCart([])} className="text-xs text-red-400 font-bold active:text-red-300">Vaciar Todo</button>
+            </div>
+
+            <div className="overflow-y-auto mb-3 space-y-3 px-1">
+              {cart.map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <div className="flex-1 pr-2">
+                    <p className="text-sm font-medium leading-tight line-clamp-1">{item.product.name}</p>
+                    <p className="text-xs text-emerald-400">${item.product.price} c/u</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center bg-gray-800 rounded-lg">
+                      <button onClick={() => decreaseFromCart(item.product.id)} className="p-1.5 text-gray-300 active:text-white active:bg-gray-700 rounded-l-lg"><Minus className="w-3.5 h-3.5"/></button>
+                      <span className="w-6 text-center text-sm font-bold">{item.quantity}</span>
+                      <button onClick={() => addToCart(item.product)} className="p-1.5 text-gray-300 active:text-white active:bg-gray-700 rounded-r-lg"><Plus className="w-3.5 h-3.5"/></button>
+                    </div>
+                    <span className="font-bold w-12 text-right text-sm">${item.subtotal}</span>
+                    <button onClick={() => removeFromCart(item.product.id)} className="text-red-400 p-1 active:bg-gray-800 rounded-md"><Trash2 className="w-4 h-4"/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-between items-center pt-3 border-t border-gray-700 mb-3">
+              <span className="text-gray-400 text-sm">Total a cobrar</span>
               <span className="text-2xl font-bold text-emerald-400">${cartTotal}</span>
             </div>
-            <button onClick={() => setShowCheckout(true)} className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl">Cobrar</button>
+            <button onClick={() => setShowCheckout(true)} className="w-full bg-emerald-500 hover:bg-emerald-600 active:scale-[0.98] transition-transform text-white font-bold py-3 rounded-xl">Continuar</button>
           </div>
         </div>
       )}
