@@ -3,7 +3,7 @@ import { auth, db } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info, Store, Edit2, Trash2, Receipt, Camera, Loader2, RefreshCw } from 'lucide-react';
+import { ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info, Store, Edit2, Trash2, Receipt, Camera, Loader2, RefreshCw, Image } from 'lucide-react';
 
 const HorseLogo = ({ className = "w-8 h-8" }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -51,6 +51,7 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [scannedTicket, setScannedTicket] = useState(null);
   const ticketInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -207,7 +208,7 @@ export default function App() {
 
     setIsScanning(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
       const imagePart = await fileToGenerativePart(file);
       const prompt = "Actua como un lector de tickets de mayoristas en Argentina. Analiza esta imagen y extrae los productos comprados. Devuelve UNICAMENTE un arreglo en formato JSON valido, sin texto adicional ni formato markdown. Cada objeto debe tener: 'name' (nombre del producto limpio, sin codigos raros), 'quantity' (cantidad comprada, en numero), 'cost' (precio de costo pagado en total por esa cantidad, en numero). Ignora impuestos, totales o datos del local.";
 
@@ -505,9 +506,14 @@ export default function App() {
           <h2 className="font-bold text-gray-800 text-lg">Compras Mayoristas</h2>
           <div className="flex gap-2">
             <input type="file" accept="image/*" capture="environment" ref={ticketInputRef} onChange={handleTicketUpload} className="hidden" />
-            <button onClick={() => ticketInputRef.current?.click()} disabled={isScanning} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold flex items-center shadow-md disabled:opacity-50">
+            <input type="file" accept="image/*" ref={galleryInputRef} onChange={handleTicketUpload} className="hidden" />
+            <button onClick={() => ticketInputRef.current?.click()} disabled={isScanning} className="bg-blue-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center shadow-md disabled:opacity-50">
               {isScanning ? <Loader2 className="w-4 h-4 mr-1 animate-spin"/> : <Camera className="w-4 h-4 mr-1"/>}
-              {isScanning ? 'Leyendo IA...' : 'Escanear Ticket'}
+              {isScanning ? 'Leyendo...' : 'Camara'}
+            </button>
+            <button onClick={() => galleryInputRef.current?.click()} disabled={isScanning} className="bg-emerald-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center shadow-md disabled:opacity-50">
+              <Image className="w-4 h-4 mr-1"/>
+              Galeria
             </button>
             <button onClick={() => setNewPurchaseModal(true)} className="bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-bold flex items-center"><Plus className="w-4 h-4"/></button>
           </div>
