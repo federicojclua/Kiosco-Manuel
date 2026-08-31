@@ -208,7 +208,7 @@ export default function App() {
 
     setIsScanning(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", generationConfig: { responseMimeType: "application/json" } });
+      const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash", generationConfig: { responseMimeType: "application/json" } });
       const imagePart = await fileToGenerativePart(file);
       const prompt = "Actua como un lector de tickets de mayoristas en Argentina. Analiza esta imagen y extrae los productos comprados. Devuelve UNICAMENTE un arreglo en formato JSON valido, sin texto adicional ni formato markdown. Cada objeto debe tener: 'name' (nombre del producto limpio, sin codigos raros), 'quantity' (cantidad comprada, en numero), 'cost' (precio de costo pagado en total por esa cantidad, en numero). Ignora impuestos, totales o datos del local.";
 
@@ -491,6 +491,12 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+                <button onClick={() => {
+                  const newItem = { id: Date.now() + Math.random(), name: '', quantity: 1, cost: '', price: '' };
+                  setScannedTicket({...scannedTicket, items: [...scannedTicket.items, newItem]});
+                }} className="w-full border-2 border-dashed border-emerald-300 text-emerald-600 font-bold py-3 rounded-xl flex items-center justify-center hover:bg-emerald-50 active:bg-emerald-100 transition-colors">
+                  <Plus className="w-5 h-5 mr-1"/> Agregar producto olvidado
+                </button>
               </div>
             </div>
             
