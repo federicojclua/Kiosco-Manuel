@@ -3,7 +3,7 @@ import { auth, db } from './firebase';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info, Store, Edit2, Trash2, Receipt, Camera, Loader2 } from 'lucide-react';
+import { ShoppingCart, Package, BookOpen, LogOut, Plus, Minus, Search, Printer, X, CheckCircle2, AlertCircle, TrendingUp, ChevronDown, ChevronUp, HelpCircle, Bell, Trophy, Info, Store, Edit2, Trash2, Receipt, Camera, Loader2, RefreshCw } from 'lucide-react';
 
 const HorseLogo = ({ className = "w-8 h-8" }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -810,6 +810,7 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-gray-200 p-4">
         <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md relative">
           {toastMsg && <div className="absolute -top-16 left-0 right-0 mx-4 bg-gray-800 text-white p-3 rounded-lg text-sm text-center shadow-lg">{toastMsg}</div>}
+          <button onClick={() => window.location.reload()} title="Actualizar" className="absolute top-3 right-3 bg-gray-100 p-2 rounded-full"><RefreshCw className="w-5 h-5 text-gray-500" /></button>
           <div className="flex flex-col items-center mb-8">
             <div className="bg-emerald-500 p-4 rounded-full mb-4"><HorseLogo className="w-12 h-12 text-white" /></div>
             <h1 className="text-2xl font-black text-gray-800">Kiosco Manuel</h1>
@@ -877,6 +878,7 @@ export default function App() {
         <div className="bg-gray-900 text-white pt-6 pb-4 px-4 flex justify-between items-center shadow-md z-10">
           <div className="flex items-center"><div className="bg-emerald-500 p-2 rounded-xl mr-3"><HorseLogo className="w-6 h-6 text-white" /></div><h1 className="font-black text-lg tracking-wide">KIOSCO MANUEL</h1></div>
           <div className="flex gap-2">
+            <button onClick={() => window.location.reload()} title="Actualizar" className="p-2 bg-gray-800 rounded-full active:bg-emerald-500 transition-colors"><RefreshCw className="w-5 h-5 text-gray-300" /></button>
             <button onClick={() => setShowTutorial(true)} className="p-2 bg-gray-800 rounded-full active:bg-blue-500 transition-colors"><HelpCircle className="w-5 h-5 text-gray-300" /></button>
             <button onClick={() => signOut(auth)} className="p-2 bg-gray-800 rounded-full active:bg-red-500 transition-colors"><LogOut className="w-5 h-5 text-gray-300" /></button>
           </div>
